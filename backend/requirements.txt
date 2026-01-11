@@ -1,0 +1,17 @@
+fastapi
+uvicorn
+python-multipart
+python-jose[cryptography]
+passlib[bcrypt]
+python-dotenv
+numpy
+opencv-python-headless
+easyocr
+scikit-learn
+# Let pip find the best PyTorch version for Python 3.13
+torch --index-url https://download.pytorch.org/whl/cpu
+torchvision --index-url https://download.pytorch.org/whl/cpu
+sentence-transformers
+faiss-cpu
+pydantic
+pydantic-settings
