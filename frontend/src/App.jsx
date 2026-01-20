@@ -102,63 +102,58 @@ const Sidebar = ({ activeTab, setActiveTab, isOpen, setIsOpen }) => {
 };
 
 // --- COMPONENT: VERIFICATION FLOW ---
+
 // --- COMPONENT: VERIFICATION FLOW ---
 const VerificationView = () => {
   const [step, setStep] = useState(1);
-  const [idFile, setIdFile] = useState(null);
+  
+  const [idFileFront, setIdFileFront] = useState(null);
+  const [idFileBack, setIdFileBack] = useState(null);
   const [selfie, setSelfie] = useState(null);
+  
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
-  const webcamRef = useRef(null);
   
-  // NEW: State for Real Stats
+  // Appointment Form State
+  const [appointment, setAppointment] = useState({ name: "", date: "", phone: "" });
+  const [appointmentBooked, setAppointmentBooked] = useState(false);
+  
+  const webcamRef = useRef(null);
   const [stats, setStats] = useState({ total_verified: 0, success_rate: 0, status: "Offline" });
 
-  // NEW: Fetch Real Stats from Backend on Load
-  useEffect(() => {
-    fetchStats();
-  }, []);
+  useEffect(() => { fetchStats(); }, []);
 
   const fetchStats = async () => {
     try {
       const res = await axios.get("http://127.0.0.1:8000/api/v1/kyc/stats");
       setStats(res.data);
-    } catch (error) {
-      console.error("Error fetching stats:", error);
-    }
+    } catch (error) { console.error(error); }
   };
 
-  const handleFileSelect = (e, isIdCard) => {
+  const handleFileSelect = (e, type) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
-      if (isIdCard) {
-        setIdFile(file);
-        setStep(2);
-      } else {
-        setSelfie(file);
-        submitKYC(idFile, file);
-      }
+      if (type === 'front') { setIdFileFront(file); setStep(2); }
+      else if (type === 'back') { setIdFileBack(file); setStep(3); }
     }
   };
 
   const captureSelfie = useCallback(() => {
     const imageSrc = webcamRef.current.getScreenshot();
     if (!imageSrc) return;
-    fetch(imageSrc)
-      .then((res) => res.blob())
-      .then((blob) => {
+    fetch(imageSrc).then((res) => res.blob()).then((blob) => {
         const file = new File([blob], "selfie.jpg", { type: "image/jpeg" });
         setSelfie(file);
-        submitKYC(idFile, file);
+        submitKYC(idFileFront, idFileBack, file);
       });
-  }, [webcamRef, idFile]);
+  }, [webcamRef, idFileFront, idFileBack]);
 
-  const submitKYC = async (idCard, selfieImg) => {
-    setStep(3);
-    setLoading(true);
-    setResult(null); 
+  const submitKYC = async (front, back, selfieImg) => {
+    setStep(4); setLoading(true); setResult(null); setAppointmentBooked(false);
+    
     const formData = new FormData();
-    formData.append("id_card", idCard);
+    formData.append("id_card_front", front);
+    formData.append("id_card_back", back);
     formData.append("selfie", selfieImg);
 
     try {
@@ -166,50 +161,43 @@ const VerificationView = () => {
         headers: { "Content-Type": "multipart/form-data" },
       });
       setResult(response.data);
-      // REFRESH STATS AFTER A NEW VERIFICATION
       fetchStats(); 
     } catch (error) {
-      console.error("KYC Error:", error);
       alert("Verification Failed! Check backend console.");
       setStep(1);
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
-  const isApproved = () => result?.final_decision === "APPROVED";
+  const handleBookAppointment = (e) => {
+    e.preventDefault();
+    // In a real app, send this to backend
+    setTimeout(() => setAppointmentBooked(true), 1000);
+  };
+
+  // LOGIC: Is the user Safe?
+  // Safe if: Decision is APPROVED (Face Match > 50) AND Risk Score is LOW (< 50)
+  const isSafe = () => {
+    if (!result) return false;
+    const faceOk = result.face_match.score >= 50;
+    const riskOk = result.regional_risk.score <= 50;
+    return faceOk && riskOk;
+  };
 
   return (
     <div className="max-w-5xl mx-auto w-full animate-fade-in">
       
-      {/* 1. TOP STATS ROW (Now Connected to DB) */}
+      {/* 1. TOP STATS ROW */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
-        <StatCard 
-          icon={Users} 
-          label="Total Verified" 
-          value={stats.total_verified} // REAL DB COUNT
-          color="bg-indigo-500 text-indigo-400" 
-        />
-        <StatCard 
-          icon={CheckCircle} 
-          label="Success Rate" 
-          value={`${stats.success_rate}%`} // REAL MATH
-          color="bg-emerald-500 text-emerald-400" 
-        />
-        <StatCard 
-          icon={Activity} 
-          label="System Status" 
-          value={stats.status} 
-          color="bg-blue-500 text-blue-400" 
-        />
+        <StatCard icon={Users} label="Total Verified" value={stats.total_verified} color="bg-indigo-500 text-indigo-400" />
+        <StatCard icon={CheckCircle} label="Success Rate" value={`${stats.success_rate}%`} color="bg-emerald-500 text-emerald-400" />
+        <StatCard icon={Activity} label="System Status" value={stats.status} color="bg-blue-500 text-blue-400" />
       </div>
 
       <div className="flex flex-col lg:flex-row gap-8 items-start">
         
-        {/* 2. MAIN CARD (Same as before) */}
+        {/* 2. MAIN CARD */}
         <div className="flex-1 w-full bg-[#131B2C] rounded-3xl shadow-2xl border border-white/5 p-8 relative overflow-hidden">
           
-          {/* Header */}
           <div className="flex justify-between items-center mb-8">
             <div>
               <h1 className="text-2xl font-bold text-white">Identity Verification</h1>
@@ -222,122 +210,199 @@ const VerificationView = () => {
             </div>
           </div>
 
-          {/* Progress Bar */}
           <div className="flex mb-10 items-center gap-2">
-            {[1, 2, 3].map((s) => (
+            {[1, 2, 3, 4].map((s) => (
               <div key={s} className={`h-2 rounded-full flex-1 transition-all duration-500 ${step >= s ? 'bg-indigo-500 shadow-[0_0_10px_rgba(99,102,241,0.5)]' : 'bg-white/5'}`} />
             ))}
           </div>
 
-          {/* STEP 1: Upload */}
+          {/* STEP 1: Upload FRONT */}
           {step === 1 && (
             <div className="text-center py-8 animate-fade-in">
               <div className="w-24 h-24 mx-auto rounded-full bg-indigo-500/10 flex items-center justify-center mb-6 border border-indigo-500/20">
                 <Upload className="w-10 h-10 text-indigo-400" />
               </div>
-              <h2 className="text-xl font-bold text-white mb-2">Upload Government ID</h2>
-              <p className="text-gray-400 text-sm mb-8 max-w-sm mx-auto">Supports Aadhaar, PAN Card, Driving License. Ensure text is clear.</p>
-              
+              <h2 className="text-xl font-bold text-white mb-2">Upload ID Front Side</h2>
               <label className="w-full flex flex-col items-center justify-center h-48 border-2 border-dashed border-white/10 rounded-2xl cursor-pointer hover:border-indigo-500/50 hover:bg-indigo-500/5 transition-all group">
                 <ImageIcon className="w-10 h-10 text-gray-500 mb-4 group-hover:text-indigo-400 transition-colors" />
-                <p className="text-sm text-gray-300 font-medium">Click to upload or drag & drop</p>
-                <p className="text-xs text-gray-500 mt-2">JPG, PNG, PDF (Max 5MB)</p>
-                <input type="file" className="hidden" onChange={(e) => handleFileSelect(e, true)} accept="image/*" />
+                <p className="text-sm text-gray-300 font-medium">Click to upload Front Side</p>
+                <input type="file" className="hidden" onChange={(e) => handleFileSelect(e, 'front')} accept="image/*" />
               </label>
             </div>
           )}
 
-          {/* STEP 2: Selfie */}
+          {/* STEP 2: Upload BACK */}
           {step === 2 && (
+            <div className="text-center py-8 animate-fade-in">
+              <div className="w-24 h-24 mx-auto rounded-full bg-purple-500/10 flex items-center justify-center mb-6 border border-purple-500/20">
+                <RefreshCw className="w-10 h-10 text-purple-400" />
+              </div>
+              <h2 className="text-xl font-bold text-white mb-2">Upload ID Back Side</h2>
+              <label className="w-full flex flex-col items-center justify-center h-48 border-2 border-dashed border-white/10 rounded-2xl cursor-pointer hover:border-purple-500/50 hover:bg-purple-500/5 transition-all group">
+                <ImageIcon className="w-10 h-10 text-gray-500 mb-4 group-hover:text-purple-400 transition-colors" />
+                <p className="text-sm text-gray-300 font-medium">Click to upload Back Side</p>
+                <input type="file" className="hidden" onChange={(e) => handleFileSelect(e, 'back')} accept="image/*" />
+              </label>
+            </div>
+          )}
+
+          {/* STEP 3: Selfie */}
+          {step === 3 && (
             <div className="text-center animate-fade-in">
               <h2 className="text-xl font-bold text-white mb-6">Biometric Liveness Check</h2>
               <div className="relative rounded-2xl overflow-hidden border border-white/10 bg-black mb-8 aspect-video shadow-2xl mx-auto max-w-md">
                 <Webcam audio={false} ref={webcamRef} screenshotFormat="image/jpeg" className="w-full h-full object-cover opacity-90" videoConstraints={{ facingMode: "user" }} />
                 <div className="absolute inset-0 border-2 border-indigo-500/30 rounded-2xl pointer-events-none"></div>
-                <div className="absolute top-4 right-4 flex gap-1">
-                   <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></div>
-                   <span className="text-[10px] text-white/50 font-mono">REC</span>
-                </div>
               </div>
               <div className="flex gap-4 justify-center">
                 <button onClick={captureSelfie} className="bg-indigo-600 hover:bg-indigo-500 text-white px-8 py-3 rounded-xl font-bold transition-all shadow-lg shadow-indigo-500/20 flex items-center gap-2">
-                  <Camera className="w-5 h-5" /> Capture Photo
+                  <Camera className="w-5 h-5" /> Capture & Verify
                 </button>
               </div>
             </div>
           )}
 
-          {/* STEP 3: Results */}
-          {step === 3 && (
+          {/* STEP 4: Results */}
+          {step === 4 && (
             <div className="text-center py-6">
               {loading ? (
                 <div className="py-12">
                   <div className="w-16 h-16 border-4 border-white/10 border-t-indigo-500 rounded-full animate-spin mx-auto mb-6"></div>
                   <h3 className="text-xl font-bold text-white">Verifying Identity...</h3>
-                  <p className="text-gray-400 text-sm mt-2">Analyzing 128-point facial vectors</p>
+                  <p className="text-gray-400 text-sm mt-2">Running Fraud Detection Algorithms...</p>
                 </div>
               ) : result && (
                 <div className="animate-fade-in max-w-md mx-auto">
-                  <div className={`w-24 h-24 mx-auto rounded-full flex items-center justify-center mb-6 shadow-[0_0_40px_rgba(0,0,0,0.3)] ${isApproved() ? 'bg-gradient-to-tr from-emerald-500 to-green-600' : 'bg-gradient-to-tr from-red-500 to-rose-600'}`}>
-                    {isApproved() ? <CheckCircle className="w-12 h-12 text-white" /> : <XCircle className="w-12 h-12 text-white" />}
+                  {/* Result Header */}
+                  <div className={`w-24 h-24 mx-auto rounded-full flex items-center justify-center mb-6 shadow-[0_0_40px_rgba(0,0,0,0.3)] ${isSafe() ? 'bg-gradient-to-tr from-emerald-500 to-green-600' : 'bg-gradient-to-tr from-red-500 to-rose-600'}`}>
+                    {isSafe() ? <CheckCircle className="w-12 h-12 text-white" /> : <AlertTriangle className="w-12 h-12 text-white" />}
                   </div>
                   
-                  <h2 className="text-3xl font-bold text-white mb-2">{isApproved() ? "Verified Successfully" : "Verification Failed"}</h2>
+                  <h2 className="text-3xl font-bold text-white mb-2">{isSafe() ? "Verified Successfully" : "Action Required"}</h2>
                   <p className="text-gray-400 mb-8">Transaction ID: <span className="font-mono text-gray-300">#{result.request_id.slice(0,8)}</span></p>
 
+                  {/* Details Card */}
                   <div className="bg-[#0B0F19] rounded-2xl p-6 border border-white/5 space-y-4">
-                    <div className="flex justify-between items-center pb-4 border-b border-white/5">
-                      <span className="text-gray-500 text-sm">Extracted Name</span>
-                      <span className="font-semibold text-white">{result.ocr_data?.name || "N/A"}</span>
-                    </div>
                     <div className="flex justify-between items-center pb-4 border-b border-white/5">
                       <span className="text-gray-500 text-sm">Government ID</span>
                       <span className="font-mono text-white tracking-wider">{result.ocr_data?.id_number || "---"}</span>
                     </div>
                     <div className="flex justify-between items-center">
-                      <span className="text-gray-500 text-sm">Confidence Score</span>
+                      <span className="text-gray-500 text-sm">Face Match</span>
                       <div className="flex items-center gap-2">
-                         <div className={`w-20 h-2 rounded-full ${isApproved() ? 'bg-emerald-500/20' : 'bg-red-500/20'}`}>
-                            <div className={`h-full rounded-full ${isApproved() ? 'bg-emerald-500' : 'bg-red-500'}`} style={{width: `${result.face_match.score}%`}}></div>
-                         </div>
-                         <span className={`font-bold ${isApproved() ? 'text-emerald-400' : 'text-red-400'}`}>{result.face_match.score}%</span>
+                         <span className={`font-bold ${result.face_match.score >= 50 ? 'text-emerald-400' : 'text-red-400'}`}>{result.face_match.score}%</span>
                       </div>
                     </div>
+                    {result.face_match.score < 50 && (
+                        <p className="text-xs text-red-400 text-right mt-1">⚠️ Low Match Score</p>
+                    )}
                   </div>
 
-                  <button onClick={() => setStep(1)} className="mt-8 w-full py-4 bg-white hover:bg-gray-100 text-gray-900 rounded-xl font-bold transition-all shadow-lg">
-                    Process Next User
-                  </button>
+                  {/* Big Data Widget */}
+                  {result?.regional_risk && (
+                    <div className={`mt-6 border rounded-2xl p-5 relative overflow-hidden text-left ${result.regional_risk.score > 50 ? 'bg-red-500/10 border-red-500/50' : 'bg-[#0B0F19] border-white/10'}`}>
+                      <div className={`absolute top-0 right-0 text-[10px] font-bold px-3 py-1 text-white rounded-bl-xl shadow-lg ${result.regional_risk.score > 50 ? 'bg-red-600' : 'bg-indigo-600'}`}>
+                        {result.regional_risk.score > 50 ? 'HIGH RISK' : 'LOW RISK'}
+                      </div>
+                      
+                      <div className="flex items-start gap-4 relative z-10">
+                        <div className={`p-3 rounded-xl border ${result.regional_risk.score > 50 ? 'bg-red-500/20 border-red-500/30' : 'bg-indigo-500/10 border-indigo-500/20'}`}>
+                           {result.regional_risk.score > 50 ? <AlertTriangle className="w-6 h-6 text-red-400" /> : <ShieldCheck className="w-6 h-6 text-indigo-400" />}
+                        </div>
+                        <div className="flex-1">
+                           <h4 className="text-white font-bold text-sm">Geo-Spatial Risk</h4>
+                           <div className="grid grid-cols-2 gap-4 mt-3 bg-white/5 rounded-xl p-3 border border-white/5">
+                             <div>
+                                <p className="text-[10px] text-gray-500 uppercase">Region</p>
+                                <p className="text-white font-mono text-sm truncate">{result.regional_risk.district}</p>
+                             </div>
+                             <div>
+                                <p className="text-[10px] text-gray-500 uppercase">Score</p>
+                                <span className={`text-sm font-bold ${result.regional_risk.score > 50 ? 'text-red-400' : 'text-emerald-400'}`}>
+                                     {result.regional_risk.score}/100
+                                </span>
+                             </div>
+                           </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* --- CONDITIONAL ACTION: BOOK APPOINTMENT --- */}
+                  {!isSafe() && (
+                    <div className="mt-8 animate-fade-in">
+                       {!appointmentBooked ? (
+                           <div className="bg-white/5 border border-red-500/30 rounded-2xl p-6">
+                              <h3 className="text-white font-bold mb-2 flex items-center gap-2">
+                                <Users className="w-5 h-5 text-red-400" /> Physical Verification Required
+                              </h3>
+                              <p className="text-gray-400 text-sm mb-4">
+                                Due to low confidence or high regional risk, you must verify your identity at a government center.
+                              </p>
+                              <form onSubmit={handleBookAppointment} className="space-y-3">
+                                <input required type="text" placeholder="Full Name" className="w-full bg-[#0B0F19] border border-white/10 rounded-lg px-4 py-3 text-white text-sm focus:border-indigo-500 outline-none" 
+                                    onChange={e => setAppointment({...appointment, name: e.target.value})} />
+                                <input required type="date" className="w-full bg-[#0B0F19] border border-white/10 rounded-lg px-4 py-3 text-white text-sm focus:border-indigo-500 outline-none" 
+                                    onChange={e => setAppointment({...appointment, date: e.target.value})} />
+                                <button type="submit" className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl transition-all shadow-lg">
+                                   Book Appointment Now
+                                </button>
+                              </form>
+                           </div>
+                       ) : (
+                           <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-6 text-center">
+                              <div className="w-16 h-16 bg-emerald-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                                 <CheckCircle className="w-8 h-8 text-emerald-400" />
+                              </div>
+                              <h3 className="text-white font-bold text-lg">Appointment Confirmed!</h3>
+                              <p className="text-emerald-200/70 text-sm mt-2">
+                                 Your token number is <span className="font-mono font-bold text-white">TK-{Math.floor(Math.random()*9000)+1000}</span>.
+                                 <br/>Please visit the center on {appointment.date}.
+                              </p>
+                              <button onClick={() => setStep(1)} className="mt-6 text-sm text-gray-400 hover:text-white underline">
+                                Return to Home
+                              </button>
+                           </div>
+                       )}
+                    </div>
+                  )}
+
+                  {/* Standard Continue Button (Only if Safe) */}
+                  {isSafe() && (
+                    <button onClick={() => setStep(1)} className="mt-8 w-full py-4 bg-white hover:bg-gray-100 text-gray-900 rounded-xl font-bold transition-all shadow-lg">
+                      Process Next User
+                    </button>
+                  )}
                 </div>
               )}
             </div>
           )}
         </div>
 
-        {/* 3. RIGHT SIDE INFO (Static for now, but looks nice) */}
+        {/* 3. RIGHT SIDE INFO */}
         <div className="hidden lg:block w-80 space-y-6">
            <div className="bg-gradient-to-br from-indigo-600 to-purple-700 rounded-3xl p-6 shadow-2xl relative overflow-hidden">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
-              <h3 className="text-xl font-bold text-white mb-2">Upgrade to Pro</h3>
-              <p className="text-indigo-100 text-sm mb-6">Get access to global ID checks, AML screening, and API access.</p>
-              <button className="bg-white text-indigo-600 px-4 py-2 rounded-lg text-sm font-bold shadow-lg">View Plans</button>
+             <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
+             <h3 className="text-xl font-bold text-white mb-2">Upgrade to Pro</h3>
+             <p className="text-indigo-100 text-sm mb-6">Get access to global ID checks, AML screening, and API access.</p>
+             <button className="bg-white text-indigo-600 px-4 py-2 rounded-lg text-sm font-bold shadow-lg">View Plans</button>
            </div>
            
            <div className="bg-[#131B2C] rounded-3xl border border-white/5 p-6">
-              <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">Recent Activity</h3>
-              <div className="space-y-4">
-                 {[1,2,3].map((i) => (
-                    <div key={i} className="flex gap-3 items-center">
-                       <div className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center">
-                          <CheckCircle className="w-4 h-4 text-emerald-500" />
-                       </div>
-                       <div>
-                          <p className="text-sm text-white font-medium">KYC Approved</p>
-                          <p className="text-xs text-gray-500">Just now</p>
-                       </div>
-                    </div>
-                 ))}
-              </div>
+             <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">Recent Activity</h3>
+             <div className="space-y-4">
+                {[1,2,3].map((i) => (
+                   <div key={i} className="flex gap-3 items-center">
+                      <div className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center">
+                         <CheckCircle className="w-4 h-4 text-emerald-500" />
+                      </div>
+                      <div>
+                         <p className="text-sm text-white font-medium">KYC Approved</p>
+                         <p className="text-xs text-gray-500">Just now</p>
+                      </div>
+                   </div>
+                ))}
+             </div>
            </div>
         </div>
 

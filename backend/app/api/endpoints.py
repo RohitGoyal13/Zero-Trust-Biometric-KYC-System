@@ -1,15 +1,19 @@
 from fastapi import APIRouter, UploadFile, File, Depends
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from app.services.face_service import face_engine
 from app.services.ocr_service import ocr_engine
 from app.database import SessionLocal, KYCRecord
 import shutil
 import os
 import uuid
+import re
 
 router = APIRouter()
 
-# Helper to talk to the DB
+# Global Cache
+KNOWN_DISTRICTS = set()
+
 def get_db():
     db = SessionLocal()
     try:
@@ -17,80 +21,126 @@ def get_db():
     finally:
         db.close()
 
+def ensure_districts_loaded(db: Session):
+    if not KNOWN_DISTRICTS:
+        results = db.execute(text("SELECT DISTINCT District FROM uidai_regional_risk")).fetchall()
+        for row in results:
+            if row[0]:
+                KNOWN_DISTRICTS.add(row[0].strip().upper())
+
 @router.post("/kyc/verify")
 async def verify_kyc(
-    id_card: UploadFile = File(...), 
+    id_card_front: UploadFile = File(...),  # <--- Renamed
+    id_card_back: UploadFile = File(...),   # <--- NEW INPUT
     selfie: UploadFile = File(...),
-    db: Session = Depends(get_db) # <--- This injects the database connection
+    db: Session = Depends(get_db)
 ):
-    # 1. Save Images
+    ensure_districts_loaded(db)
+
     request_id = str(uuid.uuid4())
     print(f"🚀 Processing Request: {request_id}")
-    
+
     os.makedirs("uploads/id_cards", exist_ok=True)
     os.makedirs("uploads/selfies", exist_ok=True)
     
-    id_path = f"uploads/id_cards/{request_id}_id.jpg"
+    # Save all 3 files
+    front_path = f"uploads/id_cards/{request_id}_front.jpg"
+    back_path = f"uploads/id_cards/{request_id}_back.jpg"
     selfie_path = f"uploads/selfies/{request_id}_selfie.jpg"
     
-    with open(id_path, "wb") as buffer:
-        shutil.copyfileobj(id_card.file, buffer)
+    with open(front_path, "wb") as buffer:
+        shutil.copyfileobj(id_card_front.file, buffer)
+    with open(back_path, "wb") as buffer:
+        shutil.copyfileobj(id_card_back.file, buffer)
     with open(selfie_path, "wb") as buffer:
         shutil.copyfileobj(selfie.file, buffer)
 
-    # 2. Run AI
-    ocr_data = ocr_engine.extract_text(id_path)
-    face_result = face_engine.verify_faces(id_path, selfie_path)
+    # 1. AI TASKS
+    # Face Match: Uses Front + Selfie
+    face_result = face_engine.verify_faces(front_path, selfie_path)
     
-    # 3. Decision
-    if face_result["match"]:
-        final_decision = "APPROVED"
-    else:
-        final_decision = "REJECTED"
+    # OCR: Extract text from BOTH sides
+    ocr_front = ocr_engine.extract_text(front_path)
+    ocr_back = ocr_engine.extract_text(back_path)
+    
+    # Merge OCR Data
+    # We use Front for Name/ID and Back for Address
+    combined_ocr = {
+        "name": ocr_front.get("name"),
+        "id_number": ocr_front.get("id_number"),
+        "address_front": ocr_front.get("address", ""),
+        "address_back": ocr_back.get("address", ""), # This usually contains the PIN
+        "raw_text_back": ocr_back.get("raw_text", "") # Full text scan of back
+    }
 
-    # 4. SAVE TO DATABASE (The New Part)
+    final_decision = "APPROVED" if face_result["match"] else "REJECTED"
+
+    # 2. SMART LOCATION DETECTION (Using Back Side Text)
+    detected_location = "Unknown"
+    regional_risk = 0
+    
+    # Scan the BACK side text for PIN Codes or District Names
+    full_back_text = f"{combined_ocr['address_back']} {combined_ocr['raw_text_back']}"
+    
+    # STRATEGY A: Find 6-Digit PIN Code on Back
+    pin_matches = re.findall(r'\b[1-9][0-9]{5}\b', full_back_text)
+    
+    found = False
+    if pin_matches:
+        for pin in pin_matches:
+            query = text("SELECT District, Risk_Score FROM uidai_regional_risk WHERE Pincode = :pin LIMIT 1")
+            result = db.execute(query, {"pin": pin}).fetchone()
+            if result:
+                detected_location = result[0]
+                regional_risk = int(result[1])
+                found = True
+                print(f"📍 Found Location via PIN {pin}: {detected_location}")
+                break
+    
+    # STRATEGY B: Fallback to District Name Search
+    if not found:
+        print("⚠️ No PIN found, checking District names...")
+        text_upper = full_back_text.upper()
+        for district in KNOWN_DISTRICTS:
+            if f" {district} " in text_upper:
+                detected_location = district
+                res = db.execute(text("SELECT Risk_Score FROM uidai_regional_risk WHERE District = :dist LIMIT 1"), {"dist": district}).fetchone()
+                if res:
+                    regional_risk = int(res[0])
+                break
+
+    # 3. Save Record
     new_record = KYCRecord(
         request_id=request_id,
-        name=ocr_data["name"],
-        id_number=ocr_data["id_number"],
+        name=combined_ocr["name"],
+        id_number=combined_ocr["id_number"],
         match_score=face_result["score"],
         decision=final_decision
     )
     db.add(new_record)
     db.commit()
-    print(f"💾 Data Saved to kyc.db for {ocr_data['name']}")
 
-    # 5. Respond
     return {
         "request_id": request_id,
         "final_decision": final_decision,
         "risk_score": int(face_result["score"]),
-        "ocr_data": ocr_data,
-        "face_match": face_result
+        "ocr_data": combined_ocr,
+        "face_match": face_result,
+        "regional_risk": {
+            "district": detected_location.title(),
+            "score": regional_risk,
+            "level": "High" if regional_risk > 50 else "Low"
+        }
     }
 
-# New Endpoint: View History
+# Keep existing history/stats endpoints...
 @router.get("/kyc/history")
 async def get_history(db: Session = Depends(get_db)):
-    # Get last 10 records
     return db.query(KYCRecord).order_by(KYCRecord.id.desc()).limit(10).all()
 
-# --- ADD THIS NEW ENDPOINT ---
 @router.get("/kyc/stats")
 async def get_stats(db: Session = Depends(get_db)):
-    # 1. Count Total Records
-    total_verified = db.query(KYCRecord).count()
-    
-    # 2. Count Approved Records to calculate Success Rate
-    approved_count = db.query(KYCRecord).filter(KYCRecord.decision == "APPROVED").count()
-    
-    # 3. Calculate Percentage
-    success_rate = 0
-    if total_verified > 0:
-        success_rate = round((approved_count / total_verified) * 100, 1)
-
-    return {
-        "total_verified": total_verified,
-        "success_rate": success_rate,
-        "status": "Online"
-    }
+    total = db.query(KYCRecord).count()
+    approved = db.query(KYCRecord).filter(KYCRecord.decision == "APPROVED").count()
+    rate = round((approved / total) * 100, 1) if total > 0 else 0
+    return {"total_verified": total, "success_rate": rate, "status": "Online"}
