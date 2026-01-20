@@ -1,17 +1,33 @@
+# --- Core Framework ---
 fastapi
 uvicorn
 python-multipart
-python-jose[cryptography]
-passlib[bcrypt]
-python-dotenv
-numpy
-opencv-python-headless
-easyocr
-scikit-learn
-# Let pip find the best PyTorch version for Python 3.13
-torch --index-url https://download.pytorch.org/whl/cpu
-torchvision --index-url https://download.pytorch.org/whl/cpu
-sentence-transformers
-faiss-cpu
 pydantic
 pydantic-settings
+python-dotenv
+
+# --- Database & Analytics (CRITICAL for Dashboard) ---
+sqlalchemy
+pandas
+numpy
+
+# --- Authentication ---
+python-jose[cryptography]
+passlib[bcrypt]
+
+# --- AI & Computer Vision ---
+# Use headless OpenCV for Cloud Servers (Fixes GUI errors)
+opencv-python-headless
+
+# OCR (Extracts Text from IDs)
+easyocr
+
+# Face Recognition (The Biometric Engine)
+deepface
+tf-keras
+
+# --- Utilities ---
+requests
+pillow
+scipy
+shapely

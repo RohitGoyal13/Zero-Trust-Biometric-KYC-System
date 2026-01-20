@@ -144,3 +144,35 @@ async def get_stats(db: Session = Depends(get_db)):
     approved = db.query(KYCRecord).filter(KYCRecord.decision == "APPROVED").count()
     rate = round((approved / total) * 100, 1) if total > 0 else 0
     return {"total_verified": total, "success_rate": rate, "status": "Online"}
+
+# --- ANALYTICS DASHBOARD ENDPOINT ---
+@router.get("/kyc/analytics-dashboard")
+async def get_analytics_dashboard(db: Session = Depends(get_db)):
+    # 1. Verification Stats
+    total = db.query(KYCRecord).count()
+    approved = db.query(KYCRecord).filter(KYCRecord.decision == "APPROVED").count()
+    rejected = total - approved
+    
+    # 2. Top 5 Riskiest Districts (From your Big Data Table)
+    # We query the Static Risk Table for the highest scores
+    top_risky = db.execute(text(
+        "SELECT DISTINCT District, Risk_Score, State FROM uidai_regional_risk ORDER BY Risk_Score DESC LIMIT 5"
+    )).fetchall()
+    
+    risky_districts = [
+        {"name": row[0], "score": int(row[1]), "state": row[2]} 
+        for row in top_risky
+    ]
+
+    # 3. Recent Fraud Attempts (Live Feed)
+    recent_failures = db.query(KYCRecord).filter(KYCRecord.decision == "REJECTED").order_by(KYCRecord.timestamp.desc()).limit(5).all()
+
+    return {
+        "verifications": {
+            "total": total,
+            "approved": approved,
+            "rejected": rejected
+        },
+        "hotspots": risky_districts,
+        "recent_alerts": recent_failures
+    }
